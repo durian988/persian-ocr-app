@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="fa">
+<head>
+  <title>OCR فارسی حرفه‌ای</title>
+  <style>
+    body { font-family: Tahoma, sans-serif; max-width: 600px; margin: auto; padding: 20px; }
+    input, button { width: 100%; margin: 10px 0; padding: 10px; }
+    #result { white-space: pre-wrap; background: #f0f0f0; padding: 10px; border-radius: 5px; }
+    #loading { display: none; color: green; }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script> <!-- pdf.js برای PDF -->
+</head>
+<body>
+  <h1>OCR فارسی با Grok</h1>
+  <p>عکس یا PDF آپلود کن، لینک بده، یا Ctrl+V بزن (عکس رو کپی کن).</p>
+  
+  <input type="file" id="fileInput" accept="image/*,application/pdf">
+  <input type="text" id="urlInput" placeholder="لینک عکس یا PDF (مثل imgur.com یا dropbox)">
+  <button onclick="performOCR()">شروع استخراج متن</button>
+  <div id="loading">در حال پردازش... لطفاً صبر کن (ممکنه ۱۰-۳۰ ثانیه طول بکشه).</div>
+  <pre id="result"></pre>
+
+  <script>
+    // هندل paste (Ctrl+V)
+    document.addEventListener('paste', (e) => {
+      const items = e.clipboardData.items;
+      for (let item of items) {
+        if (item.type.startsWith('image/')) {
+          const blob = item.getAsFile();
+          const dt = new DataTransfer();
+          dt.items.add(blob);
+          document.getElementById('fileInput').files = dt.files;
+          alert('عکس پیست شد! حالا استخراج رو بزن.');
+        }
+      }
+    });
+
+    async function performOCR() {
+      const file = document.getElementById('fileInput').files[0];
+      const url = document.getElementById('urlInput').value;
+      if (!file && !url) return alert('فایل یا لینک بده!');
+      
+      document.getElementById('loading').style.display = 'block';
+      document.getElementById('result').innerText = '';
+      let images = []; // لیست base64 تصاویر
+
+      try {
+        if (file) {
+          if (file.type === 'application/pdf') {
+            // PDF رو به تصاویر تبدیل کن
+            const arrayBuffer = await file.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+            for (let i = 1; i <= pdf.numPages; i++) {
+              const page = await pdf.getPage(i);
+              const viewport = page.getViewport({ scale: 2 }); // کیفیت بالا
+              const canvas = document.createElement('canvas');
+              canvas.height = viewport.height;
+              canvas.width = viewport.width;
+              await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+              const base64 = canvas.toDataURL('image/png').split(',')[1]; // base64 بدون prefix
+              images.push(base64);
+            }
+          } else {
+            // عکس ساده
+            const reader = new FileReader();
+            reader.onload = (e) => images.push(e.target.result.split(',')[1]);
+            reader.readAsDataURL(file);
+            await new Promise(r => reader.onloadend = r);
+          }
+        } else if (url) {
+          // لینک: fetch کن
+          const res = await fetch(url);
+          const blob = await res.blob();
+          if (blob.type === 'application/pdf') {
+            // مثل بالا PDF هندل کن
+            const arrayBuffer = await blob.arrayBuffer();
+            // ... (کد PDF مثل بالا کپی کن)
+            // برای سادگی، فعلاً فقط عکس لینک رو هندل کن – PDF لینک رو بعداً تست کن
+            alert('لینک PDF هنوز تست نشده؛ اول عکس تست کن.');
+          } else {
+            const reader = new FileReader();
+            reader.onload = (e) => images.push(e.target.result.split(',')[1]);
+            reader.readAsDataURL(blob);
+            await new Promise(r => reader.onloadend = r);
+          }
+        }
+
+        // حالا هر تصویر رو به Worker بفرست
+        let texts = [];
+        for (let img of images) {
+          const formData = new FormData();
+          formData.append('image', img); // base64
+          const response = await fetch('https://YOUR-WORKER-NAME.workers.dev/ocr', { // آدرس Worker خودت رو بذار
+            method: 'POST',
+            body: formData
+          });
+          const data = await response.json();
+          texts.push(data.text || 'خطا در این صفحه');
+        }
+        document.getElementById('result').innerText = texts.join('\n\n--- صفحه بعدی ---\n\n');
+      } catch (error) {
+        alert('خطا: ' + error.message);
+      } finally {
+        document.getElementById('loading').style.display = 'none';
+      }
+    }
+  </script>
+</body>
+</html>
